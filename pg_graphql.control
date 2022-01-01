@@ -1,4 +1,4 @@
 comment = 'GraphQL support'
 default_version = '0.1'
-relocatable = false
+relocatable = true
 requires = pgcrypto
