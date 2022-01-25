@@ -23,11 +23,11 @@ begin;
     select jsonb_pretty(
         graphql.resolve($$
         {
-          allBlogs {
+          blogCollection {
             edges {
               node {
                 ownerId
-                account {
+                owner {
                   id
                 }
               }
@@ -40,11 +40,11 @@ begin;
 --------------------------------------
  {                                   +
      "data": {                       +
-         "allBlogs": {               +
+         "blogCollection": {         +
              "edges": [              +
                  {                   +
                      "node": {       +
-                         "account": {+
+                         "owner": {  +
                              "id": 1 +
                          },          +
                          "ownerId": 1+
@@ -52,7 +52,7 @@ begin;
                  },                  +
                  {                   +
                      "node": {       +
-                         "account": {+
+                         "owner": {  +
                              "id": 1 +
                          },          +
                          "ownerId": 1+
@@ -60,7 +60,7 @@ begin;
                  },                  +
                  {                   +
                      "node": {       +
-                         "account": {+
+                         "owner": {  +
                              "id": 1 +
                          },          +
                          "ownerId": 1+
@@ -68,7 +68,7 @@ begin;
                  },                  +
                  {                   +
                      "node": {       +
-                         "account": {+
+                         "owner": {  +
                              "id": 2 +
                          },          +
                          "ownerId": 2+
