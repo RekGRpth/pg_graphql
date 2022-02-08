@@ -47,7 +47,15 @@ begin
                                         field_rec.id,
                                         x.sel
                                     )
-                                    order by ga.name
+                                    order by
+                                        ga.column_attribute_num,
+                                        case ga.name
+                                            when 'set' then 97
+                                            when 'filter' then 98
+                                            when 'atMost' then 99
+                                            else 0
+                                        end,
+                                        ga.name
                                 ),
                                 '[]'
                             )
@@ -57,7 +65,7 @@ begin
                             ga.parent_arg_field_id = field_rec.id
                             and not ga.is_hidden_from_schema
                             and ga.is_arg
-                            and ga.parent_type = field_rec.type_ -- todo double check this join
+                            and ga.parent_type = field_rec.type_
                     )
                     -- INPUT_OBJECT types only
                     when selection_name = 'defaultValue' then to_jsonb(field_rec.default_value)

@@ -62,6 +62,10 @@ begin;
                      "name": "AccountConnection"  +
                  },                               +
                  {                                +
+                     "kind": "INPUT_OBJECT",      +
+                     "name": "AccountCreateInput" +
+                 },                               +
+                 {                                +
                      "kind": "OBJECT",            +
                      "name": "AccountEdge"        +
                  },                               +
@@ -71,11 +75,11 @@ begin;
                  },                               +
                  {                                +
                      "kind": "INPUT_OBJECT",      +
-                     "name": "AccountInsertInput" +
+                     "name": "AccountOrderBy"     +
                  },                               +
                  {                                +
                      "kind": "INPUT_OBJECT",      +
-                     "name": "AccountOrderBy"     +
+                     "name": "AccountUpdateInput" +
                  },                               +
                  {                                +
                      "kind": "SCALAR",            +
@@ -94,16 +98,16 @@ begin;
                      "name": "BlogConnection"     +
                  },                               +
                  {                                +
+                     "kind": "INPUT_OBJECT",      +
+                     "name": "BlogCreateInput"    +
+                 },                               +
+                 {                                +
                      "kind": "OBJECT",            +
                      "name": "BlogEdge"           +
                  },                               +
                  {                                +
                      "kind": "INPUT_OBJECT",      +
                      "name": "BlogFilter"         +
-                 },                               +
-                 {                                +
-                     "kind": "INPUT_OBJECT",      +
-                     "name": "BlogInsertInput"    +
                  },                               +
                  {                                +
                      "kind": "INPUT_OBJECT",      +
@@ -118,6 +122,10 @@ begin;
                      "name": "BlogPostConnection" +
                  },                               +
                  {                                +
+                     "kind": "INPUT_OBJECT",      +
+                     "name": "BlogPostCreateInput"+
+                 },                               +
+                 {                                +
                      "kind": "OBJECT",            +
                      "name": "BlogPostEdge"       +
                  },                               +
@@ -127,15 +135,19 @@ begin;
                  },                               +
                  {                                +
                      "kind": "INPUT_OBJECT",      +
-                     "name": "BlogPostInsertInput"+
-                 },                               +
-                 {                                +
-                     "kind": "INPUT_OBJECT",      +
                      "name": "BlogPostOrderBy"    +
                  },                               +
                  {                                +
                      "kind": "ENUM",              +
                      "name": "BlogPostStatus"     +
+                 },                               +
+                 {                                +
+                     "kind": "INPUT_OBJECT",      +
+                     "name": "BlogPostUpdateInput"+
+                 },                               +
+                 {                                +
+                     "kind": "INPUT_OBJECT",      +
+                     "name": "BlogUpdateInput"    +
                  },                               +
                  {                                +
                      "kind": "SCALAR",            +

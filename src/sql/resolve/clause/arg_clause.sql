@@ -1,4 +1,4 @@
-create or replace function graphql.arg_clause(name text, arguments jsonb, variable_definitions jsonb, entity regclass)
+create or replace function graphql.arg_clause(name text, arguments jsonb, variable_definitions jsonb, entity regclass, default_value text = null)
     returns text
     immutable
     language plpgsql
@@ -11,13 +11,13 @@ declare
     res text;
 
     cast_to text = case
-        when name in ('first', 'last') then 'int'
+        when name in ('first', 'last', 'atMost') then 'int'
         else 'text'
     end;
 
 begin
     if arg is null then
-        return null;
+        return default_value;
 
     elsif graphql.is_variable(arg -> 'value') and is_opaque then
         return graphql.cursor_clause_for_variable(entity, graphql.arg_index(name, variable_definitions));
@@ -26,15 +26,18 @@ begin
         return graphql.cursor_clause_for_literal(arg -> 'value' ->> 'value');
 
 
-    -- Order by
-
     -- Non-special variable
     elsif graphql.is_variable(arg -> 'value') then
         return '$' || graphql.arg_index(name, variable_definitions)::text || '::' || cast_to;
 
     -- Non-special literal
     else
-        return format('%L::%s', (arg -> 'value' ->> 'value'), cast_to);
+        return
+            format(
+                '%L::%s',
+                (arg -> 'value' ->> 'value'),
+                cast_to
+            );
     end if;
 end
 $$;

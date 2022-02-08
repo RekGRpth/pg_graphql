@@ -1,4 +1,4 @@
-create materialized view graphql.enum_value as
+create view graphql.enum_value as
     select
         type_::text,
         value::text,
