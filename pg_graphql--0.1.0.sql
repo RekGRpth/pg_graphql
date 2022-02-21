@@ -727,6 +727,8 @@ create view graphql.type as
         graphql._type t
         left join pg_class pc
             on t.entity = pc.oid
+        left join pg_type tp
+            on t.enum = tp.oid
     where
         t.name ~ '^[_A-Za-z][_0-9A-Za-z]*$'
         and (
@@ -785,11 +787,23 @@ create view graphql.type as
                                 'SELECT'
                             )
                     else true
-            end
-            -- ensure regclass' schema is on search_path
-            and pc.relnamespace::regnamespace::name = any(current_schemas(false))
+                end
+                -- ensure regclass' schema is on search_path
+                and pc.relnamespace::regnamespace::name = any(current_schemas(false))
+            )
         )
-    );
+        and (
+            t.enum is null
+            or (
+                pg_catalog.has_type_privilege(
+                    current_user,
+                    t.enum,
+                    'USAGE'
+                )
+                -- ensure enum's schema is on search_path
+                and tp.typnamespace::regnamespace::name = any(current_schemas(false))
+            )
+        );
 create materialized view graphql.entity as
     select
         oid::regclass as entity
@@ -1261,10 +1275,10 @@ begin
     insert into graphql._field(parent_type_id, type_id, constant_name, is_not_null, is_array, is_array_not_null, is_hidden_from_schema, description)
     values
         -- TODO parent type lookup from metakind
-        (graphql.type_id('PageInfo'::graphql.meta_kind), graphql.type_id('Boolean'), 'hasPreviousPage', true, false, null, false, null),
-        (graphql.type_id('PageInfo'::graphql.meta_kind), graphql.type_id('Boolean'), 'hasNextPage',     true, false, null, false, null),
-        (graphql.type_id('PageInfo'::graphql.meta_kind), graphql.type_id('String'),  'startCursor',     true, false, null, false, null),
-        (graphql.type_id('PageInfo'::graphql.meta_kind), graphql.type_id('String'),  'endCursor',       true, false, null, false, null);
+        (graphql.type_id('PageInfo'::graphql.meta_kind), graphql.type_id('Boolean'), 'hasPreviousPage', true,  false, null, false, null),
+        (graphql.type_id('PageInfo'::graphql.meta_kind), graphql.type_id('Boolean'), 'hasNextPage',     true,  false, null, false, null),
+        (graphql.type_id('PageInfo'::graphql.meta_kind), graphql.type_id('String'),  'startCursor',     false, false, null, false, null),
+        (graphql.type_id('PageInfo'::graphql.meta_kind), graphql.type_id('String'),  'endCursor',       false, false, null, false, null);
 
 
     insert into graphql._field(meta_kind, entity, parent_type_id, type_id, constant_name, is_not_null, is_array, is_array_not_null, description, is_hidden_from_schema)
@@ -2620,8 +2634,16 @@ begin
                                                         when '__typename' then (select quote_literal(name) from graphql.type where meta_kind = 'PageInfo')
                                                         when 'startCursor' then format('graphql.array_first(array_agg(%I.__cursor))', block_name)
                                                         when 'endCursor' then format('graphql.array_last(array_agg(%I.__cursor))', block_name)
-                                                        when 'hasNextPage' then format('graphql.array_last(array_agg(%I.__cursor)) <> graphql.array_first(array_agg(%I.__last_cursor))', block_name, block_name)
-                                                        when 'hasPreviousPage' then format('graphql.array_first(array_agg(%I.__cursor)) <> graphql.array_first(array_agg(%I.__first_cursor))', block_name, block_name)
+                                                        when 'hasNextPage' then format(
+                                                            'coalesce(graphql.array_last(array_agg(%I.__cursor)) <> graphql.array_first(array_agg(%I.__last_cursor)), false)',
+                                                            block_name,
+                                                            block_name
+                                                        )
+                                                        when 'hasPreviousPage' then format(
+                                                            'coalesce(graphql.array_first(array_agg(%I.__cursor)) <> graphql.array_first(array_agg(%I.__first_cursor)), false)',
+                                                            block_name,
+                                                            block_name
+                                                        )
                                                         else graphql.exception_unknown_field(graphql.name_literal(pi.sel), 'PageInfo')
 
                                                     end
@@ -3560,64 +3582,6 @@ begin
         ) fa;
 end;
 $$;
-create or replace function graphql.resolve_mutation_type(ast jsonb)
-    returns jsonb
-    stable
-    language sql
-as $$
-    select
-        -- check mutations exist
-        case exists(select 1 from graphql.field where parent_type = 'Mutation' and not is_hidden_from_schema)
-            when true then (
-                select
-                    coalesce(
-                        jsonb_object_agg(
-                            fa.field_alias,
-                            case
-                                when selection_name = 'name' then 'Mutation'
-                                when selection_name = 'description' then null
-                                else graphql.exception_unknown_field(selection_name, 'Mutation')
-                            end
-                        ),
-                        'null'::jsonb
-                    )
-                from
-                    jsonb_path_query(ast, '$.selectionSet.selections') selections,
-                    lateral( select sel from jsonb_array_elements(selections) s(sel) ) x(sel),
-                    lateral (
-                        select
-                            graphql.alias_or_name_literal(x.sel) field_alias,
-                            graphql.name_literal(x.sel) as selection_name
-                    ) fa
-        )
-    end
-$$;
-create or replace function graphql.resolve_query_type(ast jsonb)
-    returns jsonb
-    stable
-    language sql
-as $$
-    select
-        coalesce(
-            jsonb_object_agg(
-                fa.field_alias,
-                case
-                    when selection_name = 'name' then 'Query'
-                    when selection_name = 'description' then null
-                    else graphql.exception_unknown_field(selection_name, 'Query')
-                end
-            ),
-            'null'::jsonb
-        )
-    from
-        jsonb_path_query(ast, '$.selectionSet.selections') selections,
-        lateral( select sel from jsonb_array_elements(selections) s(sel) ) x(sel),
-        lateral (
-            select
-                graphql.alias_or_name_literal(x.sel) field_alias,
-                graphql.name_literal(x.sel) as selection_name
-        ) fa
-$$;
 create or replace function graphql."resolve___Schema"(
     ast jsonb,
     variable_definitions jsonb = '[]'
@@ -3644,10 +3608,17 @@ begin
             agg = agg || jsonb_build_object(graphql.alias_or_name_literal(node_field), '[]'::jsonb);
 
         elsif node_field_rec.name = 'queryType' then
-            agg = agg || jsonb_build_object(graphql.alias_or_name_literal(node_field), graphql.resolve_query_type(node_field));
+           -- agg = agg || jsonb_build_object(graphql.alias_or_name_literal(node_field), graphql.resolve_query_type(node_field));
+            agg = agg || jsonb_build_object(graphql.alias_or_name_literal(node_field), graphql."resolve___Type"('Query', node_field));
 
         elsif node_field_rec.name = 'mutationType' then
-            agg = agg || jsonb_build_object(graphql.alias_or_name_literal(node_field), graphql.resolve_mutation_type(node_field));
+            agg = agg || jsonb_build_object(
+                graphql.alias_or_name_literal(node_field),
+                case exists(select 1 from graphql.field where parent_type = 'Mutation' and not is_hidden_from_schema)
+                    when true then graphql."resolve___Type"('Mutation', node_field)
+                    else null
+                end
+            );
 
         elsif node_field_rec.name = 'subscriptionType' then
             agg = agg || jsonb_build_object(graphql.alias_or_name_literal(node_field), null);
