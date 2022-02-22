@@ -249,7 +249,7 @@ begin
                     ('Constant', edge.id, node.id,                     'node',       false, false, null::boolean, null::text, null::text, null::text[], null::text[], false),
                     ('Constant', edge.id, graphql.type_id('String'),   'cursor',     true,  false, null, null, null, null, null, false),
                     ('Constant', conn.id, edge.id,                     'edges',      true,  true,  true, null, null, null, null, false),
-                    ('Constant', conn.id, graphql.type_id('Int'),      'totalCount', true,  false, null, null, null, null, null, false),
+                    ('Constant', conn.id, graphql.type_id('Int'),      'totalCount', true,  false, null, 'The total number of records matching the `filter` criteria', null, null, null, false),
                     ('Constant', conn.id, graphql.type_id('PageInfo'::graphql.meta_kind), 'pageInfo',   true,  false, null, null, null, null, null, false),
                     ('Query.collection', graphql.type_id('Query'::graphql.meta_kind), conn.id, null, false, false, null,
                         format('A pagable collection of type `%s`', graphql.type_name(conn.entity, 'Node')), null, null, null, false)
@@ -394,19 +394,34 @@ begin
             gt.meta_kind = 'OrderBy';
 
 
-    -- IntFilter {eq: ...}
+    -- IntFilter {eq: ... neq: ... gt: ... gte: ... lt: ... lte: ... }
     insert into graphql._field(parent_type_id, type_id, constant_name, is_not_null, is_array, description)
         select
             gt.id as parent_type_id,
             gt.graphql_type_id type_id,
-            'eq' as constant_name,
+            ops.constant_name as constant_name,
             false,
             false,
             null::text as description
         from
             graphql.type gt -- IntFilter
+            join (
+                values
+                    ('eq'),
+                    ('lt'),
+                    ('lte'),
+                    ('neq'),
+                    ('gte'),
+                    ('gt')
+            ) ops(constant_name)
+                on true
         where
-            gt.meta_kind = 'FilterType';
+            gt.meta_kind = 'FilterType'
+            and (
+                gt.graphql_type_id not in (graphql.type_id('UUID'), graphql.type_id('JSON'))
+                or ops.constant_name in ('eq', 'neq')
+            );
+
 
     -- AccountFilter(column eq)
     insert into graphql._field(meta_kind, parent_type_id, type_id, is_not_null, is_array, column_name, column_attribute_num, entity, description)
