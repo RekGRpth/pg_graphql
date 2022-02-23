@@ -109,6 +109,22 @@ create or replace function graphql.slug()
 as $$
     select substr(md5(random()::text), 0, 12);
 $$;
+create function graphql.is_array(regtype)
+    returns boolean
+    immutable
+    language sql
+as
+$$
+    select pg_catalog.format_type($1, null) like '%[]'
+$$;
+create function graphql.is_composite(regtype)
+    returns boolean
+    immutable
+    language sql
+as
+$$
+    select typrelid > 0 from pg_catalog.pg_type where oid = $1;
+$$;
 create or replace function graphql.primary_key_columns(entity regclass)
     returns text[]
     language sql
@@ -611,16 +627,6 @@ as $$
 $$;
 
 
-create function graphql.sql_type_is_array(regtype)
-    returns boolean
-    immutable
-    language sql
-as
-$$
-    select pg_catalog.format_type($1, null) like '%[]'
-$$;
-
-
 create function graphql.type_name(rec graphql._type)
     returns text
     immutable
@@ -822,12 +828,13 @@ create materialized view graphql.entity as
         and pi.indisprimary;
 
 
-create view graphql.entity_column as
+create materialized view graphql.entity_column as
     select
         e.entity,
         pa.attname::text as column_name,
         pa.atttypid::regtype as column_type,
-        graphql.sql_type_is_array(pa.atttypid::regtype) is_array,
+        graphql.is_array(pa.atttypid::regtype) is_array,
+        graphql.is_composite(pa.atttypid::regtype) is_composite,
         pa.attnotnull as is_not_null,
         not pa.attgenerated = '' as is_generated,
         pg_get_serial_sequence(e.entity::text, pa.attname) is not null as is_serial,
@@ -843,8 +850,11 @@ create view graphql.entity_column as
         entity,
         attnum;
 
+create index ix_entity_column_entity_column_name
+    on graphql.entity_column(entity, column_name);
 
-create view graphql.entity_unique_columns as
+
+create materialized view graphql.entity_unique_columns as
     select distinct
         ec.entity,
         array_agg(ec.column_name order by array_position(pi.indkey, ec.column_attribute_num)) unique_column_set
@@ -868,7 +878,8 @@ $$
     -- SQL type from pg_catalog.format_type
     select
         case
-            when sql_type like 'int%' then 'Int' -- unsafe for int8
+            when sql_type like 'bigint%' then 'BigInt'
+            when sql_type like 'int%' then 'Int'
             when sql_type like 'bool%' then 'Boolean'
             when sql_type like 'float%' then 'Float'
             when sql_type like 'numeric%' then 'Float' -- unsafe
@@ -997,7 +1008,7 @@ begin
             and exists (select 1 from pg_enum e where e.enumtypid = t.oid);
 end;
 $$;
-create view graphql.relationship as
+create materialized view graphql.relationship as
     with rels as materialized (
         select
             const.conname as constraint_name,
@@ -1347,7 +1358,7 @@ begin
             graphql.type_id(es.column_type) as type_id,
             es.is_not_null,
             es.is_array as is_array,
-            es.is_not_null and graphql.sql_type_is_array(es.column_type) as is_array_not_null,
+            es.is_not_null and es.is_array as is_array_not_null,
             null::text description,
             es.column_name as column_name,
             es.column_type as column_type,
@@ -1358,7 +1369,8 @@ begin
             join graphql.entity_column es
                 on gt.entity = es.entity
         where
-            gt.meta_kind = 'Node';
+            gt.meta_kind = 'Node'
+            and not es.is_composite;
 
     -- Node
     -- Extensibility via function taking record type
@@ -1370,7 +1382,7 @@ begin
             gt.id parent_type_id,
             graphql.type_id(pp.prorettype::regtype) as type_id,
             false as is_not_null,
-            graphql.sql_type_is_array(pp.prorettype::regtype) as is_array,
+            graphql.is_array(pp.prorettype::regtype) as is_array,
             false as is_array_not_null,
             null::text description,
             false as is_hidden_from_schema,
@@ -1452,7 +1464,8 @@ begin
             join graphql.entity_column ec
                 on gt.entity = ec.entity
         where
-            gt.meta_kind = 'OrderBy';
+            gt.meta_kind = 'OrderBy'
+            and not ec.is_composite;
 
 
     -- IntFilter {eq: ... neq: ... gt: ... gte: ... lt: ... lte: ... }
@@ -1504,7 +1517,9 @@ begin
                 on graphql.type_id(ec.column_type) = gt_scalar.graphql_type_id
                 and gt_scalar.meta_kind = 'FilterType'
         where
-            gt.meta_kind = 'FilterEntity';
+            gt.meta_kind = 'FilterEntity'
+            and not ec.is_array -- disallow arrays
+            and not ec.is_composite; -- disallow composite
 
 
     -- Arguments
@@ -1743,7 +1758,7 @@ begin
             gf.type_id parent_type_id,
             graphql.type_id(ec.column_type) as type_id,
             false as is_not_null,
-            graphql.sql_type_is_array(ec.column_type) as is_array,
+            ec.is_array as is_array,
             false as is_array_not_null,
             true as is_arg,
             gf.id as parent_arg_field_id,
@@ -1759,7 +1774,9 @@ begin
         where
             gf.meta_kind = 'ObjectArg'
             and not ec.is_generated -- skip generated columns
-            and not ec.is_serial; -- skip (big)serial columns
+            and not ec.is_serial -- skip (big)serial columns
+            and not ec.is_array -- disallow arrays
+            and not ec.is_composite; -- disallow arrays
 
 
     -- AccountUpdateResponse.affectedCount
@@ -1860,7 +1877,7 @@ begin
             gf.type_id parent_type_id,
             graphql.type_id(ec.column_type) as type_id,
             false as is_not_null,
-            graphql.sql_type_is_array(ec.column_type) as is_array,
+            ec.is_array,
             false as is_array_not_null,
             true as is_arg,
             gf.id as parent_arg_field_id,
@@ -1876,8 +1893,9 @@ begin
         where
             gf.meta_kind = 'UpdateSetArg'
             and not ec.is_generated -- skip generated columns
-            and not ec.is_serial; -- skip (big)serial columns
-
+            and not ec.is_serial -- skip (big)serial columns
+            and not ec.is_array -- disallow arrays
+            and not ec.is_composite; -- disallow composite
 
 end;
 $$;
@@ -2737,6 +2755,11 @@ begin
                                                             graphql.alias_or_name_literal(n.sel),
                                                             case
                                                                 when gf_s.name = '__typename' then quote_literal(gf_n.type_)
+                                                                when gf_s.column_name is not null and gf_s.column_type = 'bigint'::regtype then format(
+                                                                    '(%I.%I)::text',
+                                                                    block_name,
+                                                                    gf_s.column_name
+                                                                )
                                                                 when gf_s.column_name is not null then format('%I.%I', block_name, gf_s.column_name)
                                                                 when gf_s.local_columns is not null and gf_st.meta_kind = 'Node' then
                                                                     graphql.build_node_query(
@@ -3172,6 +3195,7 @@ begin
                 '%L, %s',
                 graphql.alias_or_name_literal(x.sel),
                 case
+                    when nf.column_name is not null and nf.column_type = 'bigint'::regtype then format('(%I.%I)::text', block_name, nf.column_name)
                     when nf.column_name is not null then format('%I.%I', block_name, nf.column_name)
                     when nf.meta_kind = 'Function' then format('%I(%I)', nf.func, block_name)
                     when nf.name = '__typename' then format('%L', nf.type_)
@@ -3233,6 +3257,7 @@ begin
         E'(\nselect\njsonb_build_object(\n'
         || string_agg(quote_literal(graphql.alias_or_name_literal(x.sel)) || E',\n' ||
             case
+                when nf.column_name is not null and nf.column_type = 'bigint'::regtype then format('(%I.%I)::text', block_name, nf.column_name)
                 when nf.column_name is not null then format('%I.%I', block_name, nf.column_name)
                 when nf.meta_kind = 'Function' then format('%I(%I)', nf.func, block_name)
                 when nf.name = '__typename' then quote_literal(type_.name)
@@ -3415,6 +3440,7 @@ begin
                                             '%L, %s',
                                             graphql.alias_or_name_literal(x.sel),
                                             case
+                                                when nf.column_name is not null and nf.column_type = 'bigint'::regtype then format('(%I.%I)::text', block_name, nf.column_name)
                                                 when nf.column_name is not null then format('%I.%I', block_name, nf.column_name)
                                                 when nf.meta_kind = 'Function' then format('%I(%I)', nf.func, block_name)
                                                 when nf.name = '__typename' then format('%L', nf.type_)
@@ -4143,6 +4169,8 @@ begin
     truncate table graphql._field;
     delete from graphql._type;
     refresh materialized view graphql.entity with data;
+    refresh materialized view graphql.entity_column with data;
+    refresh materialized view graphql.relationship with data;
     perform graphql.rebuild_types();
     perform graphql.rebuild_fields();
 end;
