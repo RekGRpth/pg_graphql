@@ -117,17 +117,19 @@ begin
                         graphql.alias_or_name_literal(pi.sel),
                         case graphql.name_literal(pi.sel)
                             when '__typename' then format('%L', pit.name)
-                            when 'startCursor' then format('graphql.array_first(array_agg(%I.__cursor))', block_name)
-                            when 'endCursor' then format('graphql.array_last(array_agg(%I.__cursor))', block_name)
+                            when 'startCursor' then format('graphql.first(%I.__cursor order by %I.__page_row_num asc )', block_name, block_name)
+                            when 'endCursor' then format('graphql.first(%I.__cursor order by %I.__page_row_num desc)', block_name, block_name)
                             when 'hasNextPage' then format(
-                                'coalesce(graphql.array_last(array_agg(%I.__cursor)) <> graphql.array_first(array_agg(%I.__last_cursor)), false)',
-                                block_name,
+                                'coalesce(bool_and(%I.__has_next_page), false)',
                                 block_name
                             )
                             when 'hasPreviousPage' then format(
-                                'coalesce(graphql.array_first(array_agg(%I.__cursor)) <> graphql.array_first(array_agg(%I.__first_cursor)), false)',
-                                block_name,
-                                block_name
+                                'coalesce(bool_and(%s), false)',
+                                case
+                                    when first_ is not null and after_ is not null then 'true'
+                                    when last_ is not null and before_ is not null then 'true'
+                                    else 'false'
+                                end
                             )
                             else graphql.exception_unknown_field(graphql.name_literal(pi.sel), 'PageInfo')
                         end
@@ -243,13 +245,24 @@ begin
     select
         format('
     (
-        with xyz as (
+        with xyz_tot as (
             select
-                %s as __total_count,
-                first_value(%s) over (order by %s range between unbounded preceding and current row)::text as __first_cursor,
-                last_value(%s) over (order by %s range between current row and unbounded following)::text as __last_cursor,
+                count(1) as __total_count
+            from
+                %s as %I
+            where
+                %s
+                -- join clause
+                and %s
+                -- where clause
+                and %s
+        ),
+        -- might contain 1 extra row
+        xyz_maybe_extra as (
+            select
                 %s::text as __cursor,
-                %s -- all allowed columns
+                row_number() over () as __page_row_num_for_page_size,
+                %s -- all requested columns
             from
                 %s as %I
             where
@@ -262,7 +275,20 @@ begin
                 and %s
             order by
                 %s
-            limit %s
+            limit
+                least(%s, 30) + 1
+        ),
+        xyz as (
+            select
+                *,
+                max(%I.__page_row_num_for_page_size) over () > least(%s, 30) as __has_next_page,
+                row_number() over () as __page_row_num
+            from
+                xyz_maybe_extra as %I
+            order by
+                %s
+            limit
+                least(%s, 30)
         )
         select
             jsonb_build_object(%s)
@@ -271,22 +297,24 @@ begin
             select
                 *
             from
-                xyz
+                xyz,
+                xyz_tot
             order by
                 %s
         ) as %I
     )',
+            -- total from
+            entity,
+            block_name,
             -- total count only computed if requested
             case
-                when total_count_ast is not null then 'count(*) over ()'
-                else 'null'
+                when total_count_ast is null then 'false'
+                else 'true'
             end,
-            -- __first_cursor
-            graphql.cursor_encoded_clause(entity, block_name),
-            graphql.order_by_clause(order_by_arg, entity, block_name, false, variables),
-            -- __last_cursor
-            graphql.cursor_encoded_clause(entity, block_name),
-            graphql.order_by_clause(order_by_arg, entity, block_name, false, variables),
+            -- total join clause
+            coalesce(graphql.join_clause(field_row.local_columns, block_name, field_row.foreign_columns, parent_block_name), 'true'),
+            -- total where
+            graphql.where_clause(filter_arg, entity, block_name, variables, variable_definitions),
             -- __cursor
             graphql.cursor_encoded_clause(entity, block_name),
             -- enumerate columns
@@ -327,8 +355,19 @@ begin
                 when last_ is not null then graphql.order_by_clause(order_by_arg, entity, block_name, true, variables)
                 else graphql.order_by_clause(order_by_arg, entity, block_name, false, variables)
             end,
-            -- limit: max 20
-            least(coalesce(first_, last_), '30'),
+            -- limit
+            coalesce(first_, last_, '30'),
+            -- has_next_page block namex
+            block_name,
+            -- xyz_has_next_page limit
+            coalesce(first_, last_, '30'),
+            -- xyz
+            block_name,
+            case
+                when last_ is not null then graphql.order_by_clause(order_by_arg, entity, block_name, true, variables)
+                else graphql.order_by_clause(order_by_arg, entity, block_name, false, variables)
+            end,
+            coalesce(first_, last_, '30'),
             -- JSON selects
             concat_ws(', ', total_count_clause, page_info_clause, __typename_clause, edges_clause),
             -- final order by
